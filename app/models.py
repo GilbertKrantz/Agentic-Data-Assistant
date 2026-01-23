@@ -18,6 +18,11 @@ class DocumentLocation(BaseModel):
     page_number: Optional[int] = None
     paragraph_index: Optional[int] = None
     original_text_snippet: Optional[str] = None
+    section: Optional[str] = None
+    subsection: Optional[str] = None
+    year: Optional[int] = None
+    source_type: Optional[str] = None
+    is_table: bool = False
 
 
 class StructuredLocation(BaseModel):
