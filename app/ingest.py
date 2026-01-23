@@ -259,74 +259,60 @@ def ingest_csv_to_duckdb(
     database_path: str,
     table_name: str,
     schema_name: str = "main",
-    index_column: Optional[str] = None,
-    rename_index_to: str = "index",
 ) -> None:
     """
-    Ingest a CSV file into DuckDB table.
-
-    Args:
-        csv_path: Path to the CSV file
-        database_path: Path to the DuckDB database file
-        table_name: Name of the table to create
-        schema_name: Schema name (default: main)
-        index_column: Original index column name to rename
-        rename_index_to: New name for the index column
+    Ingest a CSV file into DuckDB using native efficient loading.
     """
     csv_file_path = Path(csv_path)
-    print(f"Loading CSV: {csv_file_path}")
-
-    # Load CSV with pandas, treating first column as index if it's unnamed
-    # This handles CSVs that have a row index saved as the first column
-    df = pd.read_csv(csv_file_path)
-    print(f"Loaded {len(df)} rows, {len(df.columns)} columns")
-
-    # Handle index column:
-    # 1. If first column is "Unnamed: 0", treat it as the row index
-    # 2. If a specific index_column is provided, use that
-    # 3. Otherwise, create a new index column
-    if "Unnamed: 0" in df.columns:
-        # First column is an unnamed index - reset and rename
-        df = df.rename(columns={"Unnamed: 0": rename_index_to})
-        print(f"Renamed 'Unnamed: 0' to '{rename_index_to}'")
-    elif index_column and index_column in df.columns:
-        df = df.rename(columns={index_column: rename_index_to})
-        print(f"Renamed column '{index_column}' to '{rename_index_to}'")
-    elif rename_index_to not in df.columns:
-        # No index column exists, create one from DataFrame index
-        df = df.reset_index(names=[rename_index_to])
-        print(f"Created new '{rename_index_to}' column from row numbers")
-
-    print(f"Final schema: {len(df.columns)} columns")
+    print(f"Loading CSV directly into DuckDB: {csv_file_path}")
 
     # Get DuckDB engine
     engine = get_duckdb_engine(database_path)
-
-    # Create table and insert data
     full_table_name = f"{schema_name}.{table_name}"
-    print(f"Creating table: {full_table_name}")
 
     with engine.connect() as conn:
-        # Drop table if exists
-        conn.execute(text(f"DROP TABLE IF EXISTS {full_table_name}"))
-        conn.commit()
+        # Create schema if not exists
+        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
 
-    # Use pandas to_sql for table creation
-    df.to_sql(
-        table_name,
-        engine,
-        schema=schema_name,
-        if_exists="replace",
-        index=False,
-    )
+        # 1. Create table directly from CSV (Zero-copy ingestion)
+        # We use read_csv with auto_detect=True.
+        # The 'union_by_name=True' helps if columns perform schema evolution later.
+        print(f"Executing Native DuckDB COPY into {full_table_name}...")
 
-    print(f"Successfully ingested {len(df)} rows into {full_table_name}")
+        query = text(
+            f"""
+            CREATE OR REPLACE TABLE {full_table_name} AS 
+            SELECT * FROM read_csv(
+                :path, 
+                header=True, 
+                auto_detect=True,
+                filename=True  -- Optional: adds a column with source filename
+            )
+        """
+        )
 
-    # Verify
-    with engine.connect() as conn:
-        result = conn.execute(text(f"SELECT COUNT(*) FROM {full_table_name}"))
-        count = result.scalar()
-        print(f"Verified: {count} rows in table")
+        conn.execute(query, {"path": str(csv_file_path)})
+
+        # 2. Handle the "Unnamed: 0" index column if it exists
+        # It's faster to rename it via SQL than Pandas
+        # Check if column exists
+        columns_result = conn.execute(text(f"DESCRIBE {full_table_name}")).fetchall()
+        column_names = [row[0] for row in columns_result]
+
+        if "Unnamed: 0" in column_names:
+            print("Renaming index column...")
+            conn.execute(
+                text(
+                    f"""
+                ALTER TABLE {full_table_name} 
+                RENAME COLUMN "Unnamed: 0" TO "index_id"
+            """
+                )
+            )
+
+        # Verify count
+        count = conn.execute(text(f"SELECT COUNT(*) FROM {full_table_name}")).scalar()
+        print(f"Successfully ingested {count} rows.")
 
 
 def run_full_ingestion(
@@ -367,8 +353,6 @@ def run_full_ingestion(
         database_path=database_path,
         table_name=table_name,
         schema_name="main",
-        index_column="Unnamed: 0",  # The CSV has an unnamed index column
-        rename_index_to="index",
     )
 
     print("\n" + "=" * 60)
@@ -382,6 +366,4 @@ if __name__ == "__main__":
         database_path="data/fraud.duckdb",
         table_name="fraud_train",
         schema_name="main",
-        index_column="Unnamed: 0",  # The CSV has an unnamed index column
-        rename_index_to="index",
     )
