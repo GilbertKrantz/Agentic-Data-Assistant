@@ -12,10 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from typing import Optional
 from uuid import uuid4
 
-import pandas as pd
 from sqlalchemy import text
 from tqdm import tqdm
 

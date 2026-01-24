@@ -1,0 +1,319 @@
+"""
+Orchestrator Agent - Main agent that coordinates all other agents.
+"""
+
+import json
+import sys
+from typing import Any, Dict, List, Optional
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.structured_output import ToolStrategy
+from langchain.messages import SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+from app.config import settings
+from app.models import (
+    AgentId,
+    ResponseStatus,
+    StandardAgentResponse,
+    UniversalEvidenceObject,
+    SourceMetadata,
+    FileType,
+    ProofCoordinates,
+    DocumentLocation,
+)
+from app.agents.orchestrator.tools import (
+    call_retriever_agent,
+    call_data_scientist_agent,
+    call_source_formatter_agent,
+    call_validator_agent,
+)
+from app.agents.orchestrator.prompts import ORCHESTRATOR_SYSTEM_PROMPT
+
+
+def _print_orchestrator_thinking(message: str, detail: str = ""):
+    """Print orchestrator thinking feedback."""
+    print(f"\n🧠 [Orchestrator] {message}")
+    if detail:
+        print(f"   └─ {detail}")
+    sys.stdout.flush()
+
+
+class OrchestratorSkillMiddleware(AgentMiddleware):
+    """Middleware that provides orchestration skills to the agent."""
+
+    tools = [
+        call_retriever_agent,
+        call_data_scientist_agent,
+        call_source_formatter_agent,
+        call_validator_agent,
+    ]
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler,
+    ) -> ModelResponse:
+        """Inject skill context into the system prompt."""
+        skills_addendum = """
+
+## Agent Coordination Skills
+
+### Retrieval Skill
+Use `call_retriever_agent` when you need to:
+- Find information from documents or databases
+- Get data before analysis
+- Look up specific facts
+
+### Analysis Skill
+Use `call_data_scientist_agent` when you need to:
+- Perform statistical analysis
+- Get insights from data
+- Run computations or ML models
+
+### Formatting Skill
+Use `call_source_formatter_agent` when you need to:
+- Format citations and references
+- Create structured evidence tables
+- Add footnotes to responses
+
+### Validation Skill
+Use `call_validator_agent` when you need to:
+- Verify accuracy of responses
+- Fact-check important claims
+- Validate numerical data
+
+## Workflow Patterns
+
+### Simple Query
+User asks a question → Call appropriate single agent → Return response
+
+### Analysis Query
+1. Call Retriever to get data context
+2. Call Data Scientist with the context
+3. (Optional) Call Validator for important results
+
+### Report Generation
+1. Call Retriever or Data Scientist for content
+2. Call Source Formatter for citations
+3. Call Validator for final check
+"""
+        # Get current system message content as string
+        if request.system_message is not None:
+            current_content = request.system_message.content
+            if isinstance(current_content, str):
+                new_content = current_content + skills_addendum
+            else:
+                new_content = str(current_content) + skills_addendum
+        else:
+            new_content = skills_addendum
+
+        new_system_message = SystemMessage(content=new_content)
+        modified_request = request.override(system_message=new_system_message)
+        return handler(modified_request)
+
+
+class OrchestratorAgent:
+    """Main agent that coordinates all specialized agents."""
+
+    def __init__(self, model_name: str = "gemini-3-flash-preview"):
+        """Initialize the Orchestrator Agent.
+
+        Args:
+            model_name: The Gemini model to use.
+        """
+        self.model = ChatGoogleGenerativeAI(
+            model=model_name,
+            api_key=settings.gemini_api_key,
+        )
+        self.agent = create_agent(
+            model=self.model,
+            system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+            middleware=[OrchestratorSkillMiddleware()],
+            response_format=ToolStrategy(StandardAgentResponse),
+        )
+
+    def invoke(
+        self,
+        query: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> StandardAgentResponse:
+        """Execute the orchestrator agent on a user query.
+
+        This is the main entry point for user queries. The orchestrator
+        will understand the query and route it to appropriate specialized
+        agents.
+
+        Args:
+            query: The user's query or request.
+            context: Optional additional context.
+
+        Returns:
+            StandardAgentResponse with the final answer.
+        """
+        try:
+            _print_orchestrator_thinking(
+                "Analyzing query...",
+                f"Query: {query[:80]}{'...' if len(query) > 80 else ''}",
+            )
+
+            # Add context to query if provided
+            full_query = query
+            if context:
+                context_str = "\n".join(f"{k}: {v}" for k, v in context.items())
+                full_query = f"{query}\n\nAdditional Context:\n{context_str}"
+                print("   └─ With additional context provided")
+                sys.stdout.flush()
+
+            _print_orchestrator_thinking("Determining which agents to use...")
+
+            result = self.agent.invoke(
+                {"messages": [{"role": "user", "content": full_query}]}
+            )
+
+            _print_orchestrator_thinking("Synthesizing final response...")
+
+            # Use structured response if available
+            if "structured_response" in result and result["structured_response"]:
+                _print_orchestrator_thinking("✓ Response ready", "Status: success")
+                return result["structured_response"]
+
+            # Fallback: Extract from messages if structured output failed
+            final_message = result["messages"][-1]
+            content = (
+                final_message.content
+                if hasattr(final_message, "content")
+                else str(final_message)
+            )
+
+            evidence_list = self._extract_evidence_from_messages(result["messages"])
+
+            _print_orchestrator_thinking("✓ Response ready", "Status: success")
+
+            return StandardAgentResponse(
+                agent_id=AgentId.ORCHESTRATOR,
+                status=ResponseStatus.SUCCESS,
+                thought_process=self._extract_thought_process(result["messages"]),
+                final_answer=content,
+                supporting_evidence=evidence_list,
+                confidence_score=self._calculate_confidence(result["messages"]),
+            )
+
+        except Exception as e:
+            _print_orchestrator_thinking("✗ Error occurred", str(e))
+            return StandardAgentResponse(
+                agent_id=AgentId.ORCHESTRATOR,
+                status=ResponseStatus.FAILED,
+                thought_process=f"Error occurred: {str(e)}",
+                final_answer=f"I encountered an error while processing your request: {str(e)}",
+                supporting_evidence=[],
+                confidence_score=0.0,
+            )
+
+    def chat(self, query: str) -> str:
+        """Simple chat interface that returns just the answer.
+
+        Args:
+            query: The user's question or request.
+
+        Returns:
+            The final answer as a string.
+        """
+        response = self.invoke(query)
+        return response.final_answer
+
+    def _extract_evidence_from_messages(
+        self, messages: List[Any]
+    ) -> List[UniversalEvidenceObject]:
+        """Extract evidence from agent tool call results."""
+        from uuid import uuid4
+
+        evidence_list = []
+
+        for msg in messages:
+            if hasattr(msg, "type") and msg.type == "tool":
+                try:
+                    # Parse tool response JSON
+                    tool_result = json.loads(msg.content)
+                    agent_id = tool_result.get("agent_id", "unknown")
+
+                    evidence = UniversalEvidenceObject(
+                        evidence_id=str(uuid4()),
+                        source_metadata=SourceMetadata(
+                            file_id="agent_response",
+                            file_name=agent_id,
+                            file_type=FileType.DOCUMENT,
+                        ),
+                        extracted_content=tool_result.get(
+                            "final_answer", str(msg.content)
+                        )[:500],
+                        proof_coordinates=ProofCoordinates(
+                            document_location=DocumentLocation(
+                                original_text_snippet=tool_result.get(
+                                    "final_answer", ""
+                                )[:200]
+                            )
+                        ),
+                    )
+                    evidence_list.append(evidence)
+                except json.JSONDecodeError:
+                    # Non-JSON response
+                    evidence = UniversalEvidenceObject(
+                        evidence_id=str(uuid4()),
+                        source_metadata=SourceMetadata(
+                            file_id="tool_response",
+                            file_name=getattr(msg, "name", "unknown_tool"),
+                            file_type=FileType.DOCUMENT,
+                        ),
+                        extracted_content=str(msg.content)[:500],
+                        proof_coordinates=ProofCoordinates(
+                            document_location=DocumentLocation(
+                                original_text_snippet=str(msg.content)[:200]
+                            )
+                        ),
+                    )
+                    evidence_list.append(evidence)
+
+        return evidence_list
+
+    def _extract_thought_process(self, messages: List[Any]) -> str:
+        """Extract the orchestrator's reasoning from messages."""
+        thoughts = []
+        for msg in messages:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tool_name = tc.get("name", "unknown")
+                    # Map tool names to readable descriptions
+                    tool_descriptions = {
+                        "call_retriever_agent": "Retrieval",
+                        "call_data_scientist_agent": "Analysis",
+                        "call_source_formatter_agent": "Formatting",
+                        "call_validator_agent": "Validation",
+                    }
+                    desc = tool_descriptions.get(tool_name, tool_name)
+                    thoughts.append(f"Called {desc}")
+        return " → ".join(thoughts) if thoughts else "Direct response"
+
+    def _calculate_confidence(self, messages: List[Any]) -> float:
+        """Calculate overall confidence based on agent responses."""
+        confidences = []
+
+        for msg in messages:
+            if hasattr(msg, "type") and msg.type == "tool":
+                try:
+                    tool_result = json.loads(msg.content)
+                    conf = tool_result.get("confidence_score")
+                    if conf is not None:
+                        confidences.append(float(conf))
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
+
+        if not confidences:
+            return 0.7  # Default confidence
+
+        # Return average confidence, weighted toward lower scores for safety
+        avg_conf = sum(confidences) / len(confidences)
+        min_conf = min(confidences)
+
+        # Blend average with minimum to be conservative
+        return (avg_conf * 0.7) + (min_conf * 0.3)
