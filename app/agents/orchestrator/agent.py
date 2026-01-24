@@ -27,6 +27,8 @@ from app.agents.orchestrator.tools import (
     call_data_scientist_agent,
     call_source_formatter_agent,
     call_validator_agent,
+    reset_evidence_pool,
+    get_evidence_pool,
 )
 from app.agents.orchestrator.prompts import ORCHESTRATOR_SYSTEM_PROMPT
 
@@ -152,6 +154,9 @@ class OrchestratorAgent:
             StandardAgentResponse with the final answer.
         """
         try:
+            # Reset evidence pool for new query
+            reset_evidence_pool()
+
             _print_orchestrator_thinking(
                 "Analyzing query...",
                 f"Query: {query[:80]}{'...' if len(query) > 80 else ''}",
@@ -173,10 +178,34 @@ class OrchestratorAgent:
 
             _print_orchestrator_thinking("Synthesizing final response...")
 
-            # Use structured response if available
+            # Get all accumulated evidence from the session
+            accumulated_evidence = get_evidence_pool()
+            evidence_objects = [
+                UniversalEvidenceObject.model_validate(e) for e in accumulated_evidence
+            ]
+
+            _print_orchestrator_thinking(
+                f"✓ Response ready",
+                f"Status: success, Total evidence: {len(evidence_objects)}",
+            )
+
+            # Use structured response if available, but add accumulated evidence
             if "structured_response" in result and result["structured_response"]:
-                _print_orchestrator_thinking("✓ Response ready", "Status: success")
-                return result["structured_response"]
+                structured_response: StandardAgentResponse = result[
+                    "structured_response"
+                ]
+                # Merge accumulated evidence with any evidence in the structured response
+                all_evidence = self._merge_evidence(
+                    evidence_objects, structured_response.supporting_evidence
+                )
+                return StandardAgentResponse(
+                    agent_id=structured_response.agent_id,
+                    status=structured_response.status,
+                    thought_process=structured_response.thought_process,
+                    final_answer=structured_response.final_answer,
+                    supporting_evidence=all_evidence,
+                    confidence_score=structured_response.confidence_score,
+                )
 
             # Fallback: Extract from messages if structured output failed
             final_message = result["messages"][-1]
@@ -186,16 +215,12 @@ class OrchestratorAgent:
                 else str(final_message)
             )
 
-            evidence_list = self._extract_evidence_from_messages(result["messages"])
-
-            _print_orchestrator_thinking("✓ Response ready", "Status: success")
-
             return StandardAgentResponse(
                 agent_id=AgentId.ORCHESTRATOR,
                 status=ResponseStatus.SUCCESS,
                 thought_process=self._extract_thought_process(result["messages"]),
                 final_answer=content,
-                supporting_evidence=evidence_list,
+                supporting_evidence=evidence_objects,
                 confidence_score=self._calculate_confidence(result["messages"]),
             )
 
@@ -209,6 +234,22 @@ class OrchestratorAgent:
                 supporting_evidence=[],
                 confidence_score=0.0,
             )
+
+    def _merge_evidence(
+        self,
+        accumulated: List[UniversalEvidenceObject],
+        new_evidence: List[UniversalEvidenceObject],
+    ) -> List[UniversalEvidenceObject]:
+        """Merge evidence lists, removing duplicates by evidence_id."""
+        seen_ids = set()
+        merged = []
+
+        for evidence in accumulated + new_evidence:
+            if evidence.evidence_id not in seen_ids:
+                merged.append(evidence)
+                seen_ids.add(evidence.evidence_id)
+
+        return merged
 
     def chat(self, query: str) -> str:
         """Simple chat interface that returns just the answer.

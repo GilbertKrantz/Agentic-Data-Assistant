@@ -8,8 +8,8 @@ from app.agents import OrchestratorAgent
 
 # Test queries for the multi-agent system
 TEST_QUERIES = [
-    "How does the daily or monthly fraud rate fluctuate over the two-year period?",
-    "Which merchants or merchant categories exhibit the highest incidence of fraudulent transactions?",
+    # "How does the daily or monthly fraud rate fluctuate over the two-year period?",
+    # "Which merchants or merchant categories exhibit the highest incidence of fraudulent transactions?",
     "What are the primary methods by which credit card fraud is committed?",
     "What are the core components of an effective fraud detection system, according to the authors?",
     "How much higher are fraud rates when the transaction counterpart is located outside the EEA?",
