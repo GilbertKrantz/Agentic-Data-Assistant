@@ -2,10 +2,15 @@
 Tools for the Orchestrator Agent - calls other specialized agents.
 Implements cumulative evidence flow between agents.
 Supports parallel execution of retriever and data_scientist agents.
+
+Optimizations:
+- Agent instance pool (singleton pattern) to avoid redundant initialization
+- Dict-based evidence pool for O(1) lookups
+- Auto-detection of parallelizable queries
 """
 
-import asyncio
 import concurrent.futures
+import re
 import sys
 from typing import Optional, List, Dict, Any, Tuple
 from langchain.tools import tool
@@ -13,48 +18,102 @@ from langchain.tools import tool
 from app.models import StandardAgentResponse, UniversalEvidenceObject
 
 
-# Global evidence accumulator for the current orchestration session
-_accumulated_evidence: List[dict] = []
+_agent_pool: Dict[str, Any] = {}
+
+
+def _get_retriever_agent():
+    """Get or create RetrieverAgent singleton."""
+    global _agent_pool
+    if "retriever" not in _agent_pool:
+        from app.agents.retriever_agent import RetrieverAgent
+
+        _agent_pool["retriever"] = RetrieverAgent(model_name="gemini-3-flash-preview")
+    return _agent_pool["retriever"]
+
+
+def _get_data_scientist_agent():
+    """Get or create DataScientistAgent singleton."""
+    global _agent_pool
+    if "data_scientist" not in _agent_pool:
+        from app.agents.data_scientist_agent import DataScientistAgent
+
+        _agent_pool["data_scientist"] = DataScientistAgent(
+            model_name="gemini-3-flash-preview"
+        )
+    return _agent_pool["data_scientist"]
+
+
+def _get_source_formatter_agent():
+    """Get or create SourceFormatterAgent singleton."""
+    global _agent_pool
+    if "source_formatter" not in _agent_pool:
+        from app.agents.source_formatter_agent import SourceFormatterAgent
+
+        _agent_pool["source_formatter"] = SourceFormatterAgent(
+            model_name="gemini-3-flash-preview"
+        )
+    return _agent_pool["source_formatter"]
+
+
+def _get_validator_agent():
+    """Get or create ValidatorAgent singleton."""
+    global _agent_pool
+    if "validator" not in _agent_pool:
+        from app.agents.validator_agent import ValidatorAgent
+
+        _agent_pool["validator"] = ValidatorAgent(model_name="gemini-3-flash-preview")
+    return _agent_pool["validator"]
+
+
+def reset_agent_pool():
+    """Reset the agent pool (useful for testing or reconfiguration)."""
+    global _agent_pool
+    _agent_pool = {}
+
+
+_accumulated_evidence: Dict[str, dict] = {}
 
 
 def reset_evidence_pool():
     """Reset the evidence pool for a new query session."""
     global _accumulated_evidence
-    _accumulated_evidence = []
+    _accumulated_evidence = {}
 
 
 def get_evidence_pool() -> List[dict]:
-    """Get the current accumulated evidence pool."""
+    """Get the current accumulated evidence pool as a list."""
     global _accumulated_evidence
-    return _accumulated_evidence.copy()
+    return list(_accumulated_evidence.values())
 
 
 def add_to_evidence_pool(evidence_list: List[UniversalEvidenceObject]):
-    """Add new evidence to the pool, filtering duplicates."""
+    """Add new evidence to the pool, filtering duplicates (O(1) per item)."""
+    from uuid import uuid4
+
     global _accumulated_evidence
-
-    existing_ids = {e.get("evidence_id") for e in _accumulated_evidence}
-
     for evidence in evidence_list:
         evidence_dict = evidence.model_dump()
-        if evidence_dict.get("evidence_id") not in existing_ids:
-            _accumulated_evidence.append(evidence_dict)
-            existing_ids.add(evidence_dict.get("evidence_id"))
+        evidence_id = evidence_dict.get("evidence_id")
+        # Generate UUID if evidence_id is missing or empty
+        if not evidence_id:
+            evidence_id = str(uuid4())
+            evidence_dict["evidence_id"] = evidence_id
+        if evidence_id not in _accumulated_evidence:
+            _accumulated_evidence[evidence_id] = evidence_dict
 
 
 def _run_agent_task(
     agent_type: str, query: str, context: Optional[str] = None
 ) -> Tuple[str, StandardAgentResponse]:
-    """Run a single agent task. Used for parallel execution."""
-    if agent_type == "retriever":
-        from app.agents.retriever_agent import RetrieverAgent
+    """Run a single agent task. Used for parallel execution.
 
-        agent = RetrieverAgent(model_name="gemini-3-flash-preview")
+    Uses agent pool (singleton pattern) for efficiency.
+    """
+    if agent_type == "retriever":
+        agent = _get_retriever_agent()
         response = agent.invoke(query)
     elif agent_type == "data_scientist":
-        from app.agents.data_scientist_agent import DataScientistAgent
-
-        agent = DataScientistAgent(model_name="gemini-3-flash-preview")
+        agent = _get_data_scientist_agent()
         context_dict: Dict[str, Any] = {"accumulated_evidence": get_evidence_pool()}
         if context:
             context_dict["additional_context"] = context
@@ -112,12 +171,11 @@ def call_retriever_agent(query: str) -> str:
     Returns:
         JSON string containing the agent's response with full evidence.
     """
-    from app.agents.retriever_agent import RetrieverAgent
     import json
 
     _print_thinking("Retriever", "Searching documents and database...", query)
 
-    agent = RetrieverAgent(model_name="gemini-3-flash-preview")
+    agent = _get_retriever_agent()  # Use agent pool
     response: StandardAgentResponse = agent.invoke(query)
 
     # Add evidence to the pool
@@ -154,8 +212,7 @@ def call_data_scientist_agent(query: str, context: Optional[str] = None) -> str:
     Use this tool when you need to:
     - Analyze fraud patterns or statistics
     - Perform calculations on data
-    - Train or evaluate ML models
-    - Get data-driven insights
+    - Get data-driven insights via SQL queries
 
     IMPORTANT: This agent has access to accumulated evidence from previous calls.
     New evidence from analysis will be added to the pool.
@@ -167,12 +224,11 @@ def call_data_scientist_agent(query: str, context: Optional[str] = None) -> str:
     Returns:
         JSON string containing the agent's analysis results with evidence.
     """
-    from app.agents.data_scientist_agent import DataScientistAgent
     import json
 
     _print_thinking("Data Scientist", "Analyzing data and computing insights...", query)
 
-    agent = DataScientistAgent(model_name="gemini-3-flash-preview")
+    agent = _get_data_scientist_agent()  # Use agent pool
 
     # Pass accumulated evidence as context
     context_dict: Dict[str, Any] = {"accumulated_evidence": get_evidence_pool()}
@@ -339,7 +395,6 @@ def call_source_formatter_agent(query: str, format_type: str = "citations") -> s
     Returns:
         JSON string containing the formatted output.
     """
-    from app.agents.source_formatter_agent import SourceFormatterAgent
     from app.models import UniversalEvidenceObject
     import json
 
@@ -347,7 +402,7 @@ def call_source_formatter_agent(query: str, format_type: str = "citations") -> s
         "Source Formatter", f"Formatting evidence as {format_type}...", query
     )
 
-    agent = SourceFormatterAgent(model_name="gemini-3-flash-preview")
+    agent = _get_source_formatter_agent()  # Use agent pool
 
     # Use accumulated evidence automatically
     accumulated = get_evidence_pool()
@@ -416,7 +471,6 @@ def call_validator_agent(
     Returns:
         JSON string containing the validation results.
     """
-    from app.agents.validator_agent import ValidatorAgent
     from app.models import (
         StandardAgentResponse,
         AgentId,
@@ -427,7 +481,7 @@ def call_validator_agent(
 
     _print_thinking("Validator", "Validating response and checking facts...", query)
 
-    agent = ValidatorAgent(model_name="gemini-3-flash-preview")
+    agent = _get_validator_agent()  # Use agent pool
 
     # Use accumulated evidence automatically
     accumulated = get_evidence_pool()

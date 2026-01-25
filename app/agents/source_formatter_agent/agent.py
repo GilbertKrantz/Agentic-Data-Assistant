@@ -7,7 +7,7 @@ from typing import List, Optional
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.structured_output import ToolStrategy
-from langchain.messages import SystemMessage
+from langchain.messages import SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import settings
@@ -151,9 +151,7 @@ class SourceFormatterAgent:
 
             full_query = "\n".join(request_parts)
 
-            result = self.agent.invoke(
-                {"messages": [{"role": "user", "content": full_query}]}
-            )
+            result = self.agent.invoke({"messages": [HumanMessage(content=full_query)]})
 
             # Use structured response if available
             if "structured_response" in result and result["structured_response"]:
@@ -223,7 +221,7 @@ class SourceFormatterAgent:
                 file_name=f"{format_type}_format",
                 file_type=FileType.DOCUMENT,
             ),
-            extracted_content=formatted_content[:500],
+            extracted_content=formatted_content,
             proof_coordinates=ProofCoordinates(
                 document_location=DocumentLocation(
                     original_text_snippet=formatted_content[:200]

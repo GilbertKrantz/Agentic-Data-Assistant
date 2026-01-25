@@ -4,19 +4,13 @@ import os
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.config import settings
-
-os.environ["LANGCHAIN_TRACING_V2"] = str(settings.langsmith_tracing)
-os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
-os.environ["LANGSMITH_PROJECT_NAME"] = settings.langsmith_project_name
-
 
 from app.agents import OrchestratorAgent
 
 
 # Test queries for the multi-agent system
 TEST_QUERIES = [
-    "How does the daily or monthly fraud rate fluctuate over the two-year period?",
+    # "How does the daily or monthly fraud rate fluctuate over the two-year period?",
     # "Which merchants or merchant categories exhibit the highest incidence of fraudulent transactions?",
     # "What are the primary methods by which credit card fraud is committed?",
     "What are the core components of an effective fraud detection system, according to the authors?",
@@ -53,9 +47,9 @@ def main() -> None:
                 print(
                     f"\n📚 Supporting Evidence ({len(response.supporting_evidence)} sources):"
                 )
-                for j, evidence in enumerate(response.supporting_evidence[:3], 1):
+                for j, evidence in enumerate(response.supporting_evidence, 1):
                     print(
-                        f"  [{j}] {evidence.source_metadata.file_name}: {evidence.extracted_content[:100]}..."
+                        f"  [{j}] {evidence.source_metadata.file_name}: {evidence.extracted_content}"
                     )
 
         except Exception as e:

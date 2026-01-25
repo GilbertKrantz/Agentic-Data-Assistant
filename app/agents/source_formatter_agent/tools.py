@@ -74,10 +74,10 @@ def format_evidence_as_footnotes(evidence_json: str) -> str:
     footnotes = []
     for i, evidence in enumerate(evidence_list, 1):
         source = evidence.get("source_metadata", {})
-        content = evidence.get("extracted_content", "")[:150]
+        content = evidence.get("extracted_content", "")
         file_name = source.get("file_name", "Unknown")
 
-        footnote = f'^{i} Source: {file_name}. "{content}..."'
+        footnote = f'^{i} Source: {file_name}. "{content}"'
         footnotes.append(footnote)
 
     return "\n\n".join(footnotes) if footnotes else "No footnotes to format"
@@ -109,8 +109,8 @@ def format_evidence_as_inline_references(evidence_json: str, answer_text: str) -
     for i, evidence in enumerate(evidence_list, 1):
         source = evidence.get("source_metadata", {})
         file_name = source.get("file_name", "Unknown")
-        content = evidence.get("extracted_content", "")[:100]
-        references.append(f'{i}. {file_name}: "{content}..."')
+        content = evidence.get("extracted_content", "")
+        references.append(f'{i}. {file_name}: "{content}"')
 
     # Add note about references (in real implementation, would parse answer for claims)
     result = f"{answer_text}\n\n[Based on {len(evidence_list)} source(s)]"
@@ -147,11 +147,11 @@ def create_evidence_summary_table(evidence_json: str) -> str:
 
     for i, evidence in enumerate(evidence_list, 1):
         source = evidence.get("source_metadata", {})
-        file_name = source.get("file_name", "Unknown")[:20]
+        file_name = source.get("file_name", "Unknown")
         file_type = source.get("file_type", "unknown")
-        content = evidence.get("extracted_content", "")[:50].replace("|", "\\|")
+        content = evidence.get("extracted_content", "").replace("|", "\\|")
 
-        table_lines.append(f"| {i} | {file_name} | {file_type} | {content}... |")
+        table_lines.append(f"| {i} | {file_name} | {file_type} | {content} |")
 
     return "\n".join(table_lines)
 

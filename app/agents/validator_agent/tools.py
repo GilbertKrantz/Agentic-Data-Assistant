@@ -325,6 +325,6 @@ def generate_validation_summary(
 
     report.append("\n" + "-" * 50)
     report.append("Validation Details:")
-    report.append(validation_results[:500])  # Include truncated results
+    report.append(validation_results)
 
     return "\n".join(report)

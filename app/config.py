@@ -11,6 +11,7 @@ class Config(BaseSettings):
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""
     langsmith_project_name: str = "Default Project"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
 
     class Config:
         env_file = ".env"

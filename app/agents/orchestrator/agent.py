@@ -3,15 +3,18 @@ Orchestrator Agent - Main agent that coordinates all other agents.
 """
 
 import json
+import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.structured_output import ToolStrategy
-from langchain.messages import SystemMessage
+from langchain.messages import SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.runnables.config import RunnableConfig
 
 from app.config import settings
+import langsmith as ls
 from app.models import (
     AgentId,
     ResponseStatus,
@@ -34,12 +37,35 @@ from app.agents.orchestrator.tools import (
 from app.agents.orchestrator.prompts import ORCHESTRATOR_SYSTEM_PROMPT
 
 
-def _print_orchestrator_thinking(message: str, detail: str = ""):
-    """Print orchestrator thinking feedback."""
-    print(f"\n🧠 [Orchestrator] {message}")
+# Global progress callback for real-time feedback
+_progress_callback: Optional[Callable[[str], None]] = None
+
+
+def set_progress_callback(callback: Optional[Callable[[str], None]]):
+    """Set a callback function for progress updates.
+
+    Args:
+        callback: A function that takes a progress message string.
+    """
+    global _progress_callback
+    _progress_callback = callback
+
+
+def _report_progress(message: str, detail: str = ""):
+    """Report progress via callback and print to stdout."""
+    full_message = f"🧠 [Orchestrator] {message}"
     if detail:
+        full_message += f" | {detail}"
+
+    # Print to stdout
+    print(f"\n{full_message}")
+    if detail and not full_message.endswith(detail):
         print(f"   └─ {detail}")
     sys.stdout.flush()
+
+    # Call progress callback if set
+    if _progress_callback:
+        _progress_callback(full_message)
 
 
 class OrchestratorSkillMiddleware(AgentMiddleware):
@@ -49,7 +75,7 @@ class OrchestratorSkillMiddleware(AgentMiddleware):
         call_retriever_agent,
         call_data_scientist_agent,
         call_parallel_retrieval_and_analysis,
-        call_source_formatter_agent,
+        # call_source_formatter_agent,
         call_validator_agent,
     ]
 
@@ -152,6 +178,7 @@ class OrchestratorAgent:
         self,
         query: str,
         context: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> StandardAgentResponse:
         """Execute the orchestrator agent on a user query.
 
@@ -162,15 +189,20 @@ class OrchestratorAgent:
         Args:
             query: The user's query or request.
             context: Optional additional context.
+            progress_callback: Optional callback function to receive progress updates.
+                              Function signature: (message: str) -> None
 
         Returns:
             StandardAgentResponse with the final answer.
         """
         try:
+            # Set progress callback for this invocation
+            set_progress_callback(progress_callback)
+
             # Reset evidence pool for new query
             reset_evidence_pool()
 
-            _print_orchestrator_thinking(
+            _report_progress(
                 "Analyzing query...",
                 f"Query: {query[:80]}{'...' if len(query) > 80 else ''}",
             )
@@ -180,16 +212,32 @@ class OrchestratorAgent:
             if context:
                 context_str = "\n".join(f"{k}: {v}" for k, v in context.items())
                 full_query = f"{query}\n\nAdditional Context:\n{context_str}"
-                print("   └─ With additional context provided")
-                sys.stdout.flush()
+                _report_progress("Adding additional context...")
 
-            _print_orchestrator_thinking("Determining which agents to use...")
+            _report_progress("Determining which agents to use...")
 
-            result = self.agent.invoke(
-                {"messages": [{"role": "user", "content": full_query}]}
+            _report_progress("Calling specialized agents...")
+
+            invoke_config = RunnableConfig(
+                run_name="OrchestratorAgent", tags=["orchestrator", "multi-agent"]
             )
 
-            _print_orchestrator_thinking("Synthesizing final response...")
+            client = ls.Client(
+                api_key=settings.langsmith_api_key,
+                api_url=settings.langsmith_endpoint,
+            )
+
+            with ls.tracing_context(
+                client=client,
+                project_name=settings.langsmith_project_name,
+                enabled=settings.langsmith_tracing,
+            ):
+                result = self.agent.invoke(
+                    {"messages": [HumanMessage(content=full_query)]},
+                    config=invoke_config,
+                )
+
+            _report_progress("Synthesizing final response...")
 
             # Get all accumulated evidence from the session
             accumulated_evidence = get_evidence_pool()
@@ -197,7 +245,7 @@ class OrchestratorAgent:
                 UniversalEvidenceObject.model_validate(e) for e in accumulated_evidence
             ]
 
-            _print_orchestrator_thinking(
+            _report_progress(
                 f"✓ Response ready",
                 f"Status: success, Total evidence: {len(evidence_objects)}",
             )
@@ -238,7 +286,9 @@ class OrchestratorAgent:
             )
 
         except Exception as e:
-            _print_orchestrator_thinking("✗ Error occurred", str(e))
+            _report_progress("✗ Error occurred", str(e))
+            # Clear progress callback
+            set_progress_callback(None)
             return StandardAgentResponse(
                 agent_id=AgentId.ORCHESTRATOR,
                 status=ResponseStatus.FAILED,
@@ -264,16 +314,21 @@ class OrchestratorAgent:
 
         return merged
 
-    def chat(self, query: str) -> str:
+    def chat(
+        self, query: str, progress_callback: Optional[Callable[[str], None]] = None
+    ) -> str:
         """Simple chat interface that returns just the answer.
 
         Args:
             query: The user's question or request.
+            progress_callback: Optional callback function to receive progress updates.
 
         Returns:
             The final answer as a string.
         """
-        response = self.invoke(query)
+        response = self.invoke(query, progress_callback=progress_callback)
+        # Clear progress callback
+        set_progress_callback(None)
         return response.final_answer
 
     def _extract_evidence_from_messages(
@@ -319,7 +374,7 @@ class OrchestratorAgent:
                             file_name=getattr(msg, "name", "unknown_tool"),
                             file_type=FileType.DOCUMENT,
                         ),
-                        extracted_content=str(msg.content)[:500],
+                        extracted_content=str(msg.content),
                         proof_coordinates=ProofCoordinates(
                             document_location=DocumentLocation(
                                 original_text_snippet=str(msg.content)[:200]

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.structured_output import ToolStrategy
-from langchain.messages import SystemMessage
+from langchain.messages import SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import settings
@@ -164,7 +164,7 @@ Please perform a comprehensive validation:
                 validation_request = query
 
             result = self.agent.invoke(
-                {"messages": [{"role": "user", "content": validation_request}]}
+                {"messages": [HumanMessage(content=validation_request)]}
             )
 
             # Use structured response if available
@@ -322,7 +322,7 @@ Please perform a comprehensive validation:
                 file_name=source_info,
                 file_type=FileType.DOCUMENT,
             ),
-            extracted_content=validation_content[:500],
+            extracted_content=validation_content,
             proof_coordinates=ProofCoordinates(
                 document_location=DocumentLocation(
                     original_text_snippet=validation_content[:200]

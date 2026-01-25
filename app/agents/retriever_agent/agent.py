@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.structured_output import ToolStrategy
-from langchain.messages import SystemMessage
+from langchain.messages import SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import settings
@@ -107,9 +107,7 @@ class RetrieverAgent:
             StandardAgentResponse with retrieval results.
         """
         try:
-            result = self.agent.invoke(
-                {"messages": [{"role": "user", "content": query}]}
-            )
+            result = self.agent.invoke({"messages": [HumanMessage(content=query)]})
 
             # Use structured response if available
             if "structured_response" in result and result["structured_response"]:
@@ -168,7 +166,7 @@ class RetrieverAgent:
                         file_name=getattr(msg, "name", "unknown_tool"),
                         file_type=FileType.DOCUMENT,
                     ),
-                    extracted_content=str(msg.content)[:500],  # Truncate for evidence
+                    extracted_content=str(msg.content),
                     proof_coordinates=ProofCoordinates(
                         document_location=DocumentLocation(
                             original_text_snippet=str(msg.content)[:200]
