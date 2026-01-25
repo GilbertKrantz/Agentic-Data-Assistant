@@ -2,6 +2,9 @@
 
 A sophisticated multi-agent AI system for fraud detection and analysis, powered by LangChain, Google Gemini, DuckDB, and ChromaDB. This system decomposes complex fraud analysis queries and delegates specialized tasks to intelligent agents that work collaboratively to provide accurate, cited insights.
 
+## Video Demo
+https://drive.google.com/drive/folders/112G5rutcskbKpWDTvBc8I9lWOvpwUoRE?usp=sharing
+
 ## 🌟 Features
 
 - **Multi-Agent Architecture**: Specialized agents for data analysis, retrieval, validation, and formatting
