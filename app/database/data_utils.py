@@ -138,8 +138,6 @@ class QueryEngine:
                         )
                     )
 
-                    print(evidence_list)
-
                 return evidence_list
         return []
 
