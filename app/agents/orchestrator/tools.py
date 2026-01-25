@@ -1,10 +1,13 @@
 """
 Tools for the Orchestrator Agent - calls other specialized agents.
 Implements cumulative evidence flow between agents.
+Supports parallel execution of retriever and data_scientist agents.
 """
 
+import asyncio
+import concurrent.futures
 import sys
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from langchain.tools import tool
 
 from app.models import StandardAgentResponse, UniversalEvidenceObject
@@ -37,6 +40,29 @@ def add_to_evidence_pool(evidence_list: List[UniversalEvidenceObject]):
         if evidence_dict.get("evidence_id") not in existing_ids:
             _accumulated_evidence.append(evidence_dict)
             existing_ids.add(evidence_dict.get("evidence_id"))
+
+
+def _run_agent_task(
+    agent_type: str, query: str, context: Optional[str] = None
+) -> Tuple[str, StandardAgentResponse]:
+    """Run a single agent task. Used for parallel execution."""
+    if agent_type == "retriever":
+        from app.agents.retriever_agent import RetrieverAgent
+
+        agent = RetrieverAgent(model_name="gemini-3-flash-preview")
+        response = agent.invoke(query)
+    elif agent_type == "data_scientist":
+        from app.agents.data_scientist_agent import DataScientistAgent
+
+        agent = DataScientistAgent(model_name="gemini-3-flash-preview")
+        context_dict: Dict[str, Any] = {"accumulated_evidence": get_evidence_pool()}
+        if context:
+            context_dict["additional_context"] = context
+        response = agent.invoke(query, context=context_dict)
+    else:
+        raise ValueError(f"Unknown agent type: {agent_type}")
+
+    return agent_type, response
 
 
 def _print_thinking(agent_name: str, action: str, query: str = ""):
@@ -184,6 +210,113 @@ def call_data_scientist_agent(query: str, context: Optional[str] = None) -> str:
             "thought_process": response.thought_process,
         }
     )
+
+
+@tool
+def call_parallel_retrieval_and_analysis(
+    retriever_query: str,
+    analysis_query: str,
+    analysis_context: Optional[str] = None,
+) -> str:
+    """Execute Retriever and Data Scientist agents IN PARALLEL for faster results.
+
+    Use this tool when you need BOTH retrieval AND analysis, and they can run
+    independently. This is significantly faster than calling them sequentially.
+
+    WHEN TO USE:
+    - User asks for data insights that require both searching and analysis
+    - Complex queries that need both document context and SQL analysis
+    - When retriever and data_scientist tasks are independent
+
+    WHEN NOT TO USE:
+    - When analysis depends on retriever results (use sequential calls)
+    - Simple queries that only need one agent
+
+    Args:
+        retriever_query: The search/retrieval query for finding information.
+        analysis_query: The analysis query for the data scientist.
+        analysis_context: Optional additional context for analysis.
+
+    Returns:
+        JSON string containing combined results from both agents.
+    """
+    import json
+
+    print(
+        f"\n⚡ [Parallel Execution] Running Retriever and Data Scientist in parallel..."
+    )
+    print(
+        f"   ├─ Retriever: {retriever_query[:60]}{'...' if len(retriever_query) > 60 else ''}"
+    )
+    print(
+        f"   └─ Data Scientist: {analysis_query[:60]}{'...' if len(analysis_query) > 60 else ''}"
+    )
+    sys.stdout.flush()
+
+    results: Dict[str, StandardAgentResponse] = {}
+    errors: Dict[str, str] = {}
+
+    # Use ThreadPoolExecutor for parallel execution
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {
+            executor.submit(_run_agent_task, "retriever", retriever_query): "retriever",
+            executor.submit(
+                _run_agent_task, "data_scientist", analysis_query, analysis_context
+            ): "data_scientist",
+        }
+
+        for future in concurrent.futures.as_completed(futures):
+            agent_type = futures[future]
+            try:
+                returned_type, response = future.result()
+                results[returned_type] = response
+                # Add evidence to the pool
+                add_to_evidence_pool(response.supporting_evidence)
+                _print_result(
+                    "Retriever" if returned_type == "retriever" else "Data Scientist",
+                    response.status.value,
+                    response.confidence_score,
+                    len(response.supporting_evidence),
+                )
+            except Exception as e:
+                errors[agent_type] = str(e)
+                print(f"   └─ ✗ {agent_type} failed: {e}")
+                sys.stdout.flush()
+
+    print(
+        f"\n⚡ [Parallel Execution] Complete. Total evidence: {len(get_evidence_pool())}"
+    )
+    sys.stdout.flush()
+
+    # Build combined response
+    combined_response = {
+        "parallel_execution": True,
+        "agents_called": list(results.keys()),
+        "total_accumulated_evidence": len(get_evidence_pool()),
+    }
+
+    if "retriever" in results:
+        r = results["retriever"]
+        combined_response["retriever"] = {
+            "status": r.status.value,
+            "final_answer": r.final_answer,
+            "evidence_count": len(r.supporting_evidence),
+            "confidence_score": r.confidence_score,
+        }
+
+    if "data_scientist" in results:
+        r = results["data_scientist"]
+        combined_response["data_scientist"] = {
+            "status": r.status.value,
+            "final_answer": r.final_answer,
+            "evidence_count": len(r.supporting_evidence),
+            "confidence_score": r.confidence_score,
+        }
+
+    if errors:
+        combined_response["errors"] = errors
+
+    return json.dumps(combined_response)
 
 
 @tool

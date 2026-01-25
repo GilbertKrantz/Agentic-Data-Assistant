@@ -1,19 +1,27 @@
 from pathlib import Path
 import sys
+import os
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from app.config import settings
+
+os.environ["LANGCHAIN_TRACING_V2"] = str(settings.langsmith_tracing)
+os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
+os.environ["LANGSMITH_PROJECT_NAME"] = settings.langsmith_project_name
+
 
 from app.agents import OrchestratorAgent
 
 
 # Test queries for the multi-agent system
 TEST_QUERIES = [
-    # "How does the daily or monthly fraud rate fluctuate over the two-year period?",
+    "How does the daily or monthly fraud rate fluctuate over the two-year period?",
     # "Which merchants or merchant categories exhibit the highest incidence of fraudulent transactions?",
-    "What are the primary methods by which credit card fraud is committed?",
+    # "What are the primary methods by which credit card fraud is committed?",
     "What are the core components of an effective fraud detection system, according to the authors?",
-    "How much higher are fraud rates when the transaction counterpart is located outside the EEA?",
-    "What share of total card fraud value in H1 2023 was due to cross-border transactions?",
+    # "How much higher are fraud rates when the transaction counterpart is located outside the EEA?",
+    # "What share of total card fraud value in H1 2023 was due to cross-border transactions?",
 ]
 
 

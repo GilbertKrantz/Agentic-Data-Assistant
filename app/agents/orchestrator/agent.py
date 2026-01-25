@@ -25,6 +25,7 @@ from app.models import (
 from app.agents.orchestrator.tools import (
     call_retriever_agent,
     call_data_scientist_agent,
+    call_parallel_retrieval_and_analysis,
     call_source_formatter_agent,
     call_validator_agent,
     reset_evidence_pool,
@@ -47,6 +48,7 @@ class OrchestratorSkillMiddleware(AgentMiddleware):
     tools = [
         call_retriever_agent,
         call_data_scientist_agent,
+        call_parallel_retrieval_and_analysis,
         call_source_formatter_agent,
         call_validator_agent,
     ]
@@ -61,17 +63,25 @@ class OrchestratorSkillMiddleware(AgentMiddleware):
 
 ## Agent Coordination Skills
 
+### ⚡ Parallel Execution Skill (RECOMMENDED for speed)
+Use `call_parallel_retrieval_and_analysis` when you need to:
+- Get both document/database information AND perform analysis
+- Speed up complex queries that need both retriever and data scientist
+- Run independent retrieval and analysis tasks simultaneously
+This is MUCH FASTER than calling agents sequentially.
+
 ### Retrieval Skill
 Use `call_retriever_agent` when you need to:
 - Find information from documents or databases
 - Get data before analysis
 - Look up specific facts
 
-### Analysis Skill
+### Analysis Skill  
 Use `call_data_scientist_agent` when you need to:
 - Perform statistical analysis
 - Get insights from data
 - Run computations or ML models
+- Query SQL database directly (has direct SQL access)
 
 ### Formatting Skill
 Use `call_source_formatter_agent` when you need to:
@@ -87,10 +97,13 @@ Use `call_validator_agent` when you need to:
 
 ## Workflow Patterns
 
+### ⚡ FAST: Parallel Query (PREFERRED for complex questions)
+User asks complex question → Call parallel_retrieval_and_analysis → Synthesize response
+
 ### Simple Query
 User asks a question → Call appropriate single agent → Return response
 
-### Analysis Query
+### Analysis Query (when parallel not suitable)
 1. Call Retriever to get data context
 2. Call Data Scientist with the context
 3. (Optional) Call Validator for important results

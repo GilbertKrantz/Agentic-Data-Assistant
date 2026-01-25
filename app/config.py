@@ -8,6 +8,10 @@ class Config(BaseSettings):
     gemini_api_key: str = ""
     chromadb_api_key: str = ""
 
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project_name: str = "Default Project"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

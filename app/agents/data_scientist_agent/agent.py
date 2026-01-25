@@ -22,7 +22,6 @@ from app.models import (
     StructuredLocation,
 )
 from app.agents.data_scientist_agent.tools import (
-    execute_python_code,
     retrieve_data_for_analysis,
     retrieve_documents_for_analysis,
     get_schema_info,
@@ -34,7 +33,6 @@ class DataScienceSkillMiddleware(AgentMiddleware):
     """Middleware that provides data science skills to the agent."""
 
     tools = [
-        execute_python_code,
         retrieve_data_for_analysis,
         retrieve_documents_for_analysis,
         get_schema_info,
@@ -50,19 +48,18 @@ class DataScienceSkillMiddleware(AgentMiddleware):
 
 ## Data Science Skills Available
 
-### Code Execution Skill
-Use `execute_python_code` for:
-- Custom statistical analysis on retrieved data
-- Machine learning model training
-- Complex data transformations
-- Visualization generation
-- Any Python-based computation
+### ⚡ Integrated Code Execution (BUILT-IN)
+You have INTEGRATED Python code execution capability!
+- Just write Python code directly in your response
+- The code will be automatically executed by Gemini
+- Available libraries: pandas, numpy, matplotlib, seaborn, scikit-learn, scipy, tensorflow
+- Use this for statistical analysis, ML models, visualizations
 
 ### Data Retrieval Skill
 Use `retrieve_data_for_analysis` for:
 - Fetching data from DuckDB via SQL queries
-- Getting structured data for analysis
-- ALWAYS use this before code execution that needs data
+- Returns JSON format that can be parsed and analyzed
+- Supports all SQL operations (SELECT, JOIN, GROUP BY, etc.)
 
 ### Document Retrieval Skill
 Use `retrieve_documents_for_analysis` for:
@@ -74,6 +71,11 @@ Use `retrieve_documents_for_analysis` for:
 Use `get_schema_info` to:
 - Understand available tables and columns
 - Plan SQL queries effectively
+
+## Recommended Workflow
+1. Use `get_schema_info` to understand data structure
+2. Use `retrieve_data_for_analysis` to get data via SQL
+3. Write Python code directly for complex analysis (integrated execution)
 """
         # Get current system message content as string
         if request.system_message is not None:
@@ -91,7 +93,7 @@ Use `get_schema_info` to:
 
 
 class DataScientistAgent:
-    """Agent that performs data analysis through code execution."""
+    """Agent that performs data analysis through integrated code execution."""
 
     def __init__(self, model_name: str = "gemini-3-flash-preview"):
         """Initialize the Data Scientist Agent.
@@ -99,10 +101,16 @@ class DataScientistAgent:
         Args:
             model_name: The Gemini model to use.
         """
+        # Initialize base model for the agent
         self.model = ChatGoogleGenerativeAI(
             model=model_name,
             api_key=settings.gemini_api_key,
         )
+
+        # Create a separate model instance with code execution bound
+        # This will be used for direct code execution calls
+        self.model_with_code_execution = self.model.bind_tools([{"code_execution": {}}])
+
         self.agent = create_agent(
             model=self.model,
             system_prompt=DATA_SCIENTIST_SYSTEM_PROMPT,
@@ -116,6 +124,8 @@ class DataScientistAgent:
         context: Optional[Dict[str, Any]] = None,
     ) -> StandardAgentResponse:
         """Execute the data scientist agent on a query.
+
+        Uses Gemini's built-in code execution for Python analysis.
 
         Args:
             query: The analysis request to process.
@@ -131,28 +141,30 @@ class DataScientistAgent:
                 context_str = "\n".join(f"{k}: {v}" for k, v in context.items())
                 full_query = f"{query}\n\nAdditional Context:\n{context_str}"
 
-            result = self.agent.invoke(
-                {"messages": [{"role": "user", "content": full_query}]}
+            # Use the model with code execution capability directly
+            # This bypasses the agent framework but enables Gemini's native code execution
+            from langchain.messages import (
+                HumanMessage,
+                SystemMessage as LCSystemMessage,
             )
 
-            # Use structured response if available
-            if "structured_response" in result and result["structured_response"]:
-                return result["structured_response"]
+            messages = [
+                LCSystemMessage(content=DATA_SCIENTIST_SYSTEM_PROMPT),
+                HumanMessage(content=full_query),
+            ]
 
-            # Fallback: Extract from messages if structured output failed
-            final_message = result["messages"][-1]
-            content = (
-                final_message.content
-                if hasattr(final_message, "content")
-                else str(final_message)
-            )
+            result = self.model_with_code_execution.invoke(messages)
 
-            evidence_list = self._extract_evidence_from_messages(result["messages"])
+            # Extract content from the response
+            content = result.text if hasattr(result, "text") else str(result.content)
+
+            # Extract code execution evidence from content_blocks if available
+            evidence_list = self._extract_evidence_from_response(result)
 
             return StandardAgentResponse(
                 agent_id=AgentId.DATASCIENCE_AGENT,
                 status=ResponseStatus.SUCCESS,
-                thought_process=self._extract_thought_process(result["messages"]),
+                thought_process=self._extract_thought_from_response(result),
                 final_answer=content,
                 supporting_evidence=evidence_list,
                 confidence_score=self._calculate_confidence(evidence_list, content),
@@ -168,53 +180,80 @@ class DataScientistAgent:
                 confidence_score=0.0,
             )
 
-    def _extract_evidence_from_messages(
-        self, messages: List[Any]
+    def _extract_evidence_from_response(
+        self, response: Any
     ) -> List[UniversalEvidenceObject]:
-        """Extract evidence objects from code execution results."""
+        """Extract evidence from code execution response."""
         from uuid import uuid4
 
         evidence_list = []
 
-        for msg in messages:
-            if hasattr(msg, "type") and msg.type == "tool":
-                tool_name = getattr(msg, "name", "code_execution")
-                content = str(msg.content)
+        # Check for content_blocks (Gemini's structured response format)
+        content_blocks = getattr(response, "content_blocks", None)
+        if content_blocks:
+            for block in content_blocks:
+                if isinstance(block, dict):
+                    block_type = block.get("type", "")
 
-                # Create structured evidence for code execution
-                evidence = UniversalEvidenceObject(
-                    evidence_id=str(uuid4()),
-                    source_metadata=SourceMetadata(
-                        file_id="analysis_result",
-                        file_name=tool_name,
-                        file_type=FileType.STRUCTURED_DATA,
-                    ),
-                    extracted_content=content[:1000],  # Truncate for evidence
-                    proof_coordinates=ProofCoordinates(
-                        structured_location=StructuredLocation(
-                            filter_logic=f"Tool: {tool_name}",
+                    # Handle code execution blocks
+                    if (
+                        block_type == "server_tool_call"
+                        and block.get("name") == "code_interpreter"
+                    ):
+                        code = block.get("args", {}).get("code", "")
+                        evidence = UniversalEvidenceObject(
+                            evidence_id=str(uuid4()),
+                            source_metadata=SourceMetadata(
+                                file_id="code_execution",
+                                file_name="python_code",
+                                file_type=FileType.STRUCTURED_DATA,
+                            ),
+                            extracted_content=f"Executed code:\n{code[:500]}",
+                            proof_coordinates=ProofCoordinates(
+                                structured_location=StructuredLocation(
+                                    filter_logic="Code execution via Gemini",
+                                )
+                            ),
                         )
-                    ),
-                )
-                evidence_list.append(evidence)
+                        evidence_list.append(evidence)
+
+                    # Handle code execution results
+                    elif block_type == "server_tool_result":
+                        output = block.get("output", "")
+                        evidence = UniversalEvidenceObject(
+                            evidence_id=str(uuid4()),
+                            source_metadata=SourceMetadata(
+                                file_id="code_result",
+                                file_name="execution_output",
+                                file_type=FileType.STRUCTURED_DATA,
+                            ),
+                            extracted_content=f"Output:\n{output[:500]}",
+                            proof_coordinates=ProofCoordinates(
+                                structured_location=StructuredLocation(
+                                    filter_logic="Code execution result",
+                                )
+                            ),
+                        )
+                        evidence_list.append(evidence)
 
         return evidence_list
 
-    def _extract_thought_process(self, messages: List[Any]) -> str:
-        """Extract the agent's reasoning from messages."""
+    def _extract_thought_from_response(self, response: Any) -> str:
+        """Extract thought process from response."""
         thoughts = []
-        for msg in messages:
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    tool_name = tc.get("name", "unknown")
-                    # Include code snippet if it's execute_python_code
-                    if tool_name == "execute_python_code":
-                        args = tc.get("args", {})
-                        code = args.get("code", "")[:100]
-                        thoughts.append(f"Executed code: {code}...")
-                    else:
-                        thoughts.append(f"Called: {tool_name}")
-        return " -> ".join(thoughts) if thoughts else "Direct response"
+
+        content_blocks = getattr(response, "content_blocks", None)
+        if content_blocks:
+            for block in content_blocks:
+                if isinstance(block, dict):
+                    block_type = block.get("type", "")
+                    if block_type == "thinking":
+                        thoughts.append(block.get("thinking", "")[:200])
+                    elif block_type == "server_tool_call":
+                        name = block.get("name", "unknown")
+                        thoughts.append(f"Called: {name}")
+
+        return " -> ".join(thoughts) if thoughts else "Direct analysis"
 
     def _calculate_confidence(
         self, evidence: List[UniversalEvidenceObject], content: str
