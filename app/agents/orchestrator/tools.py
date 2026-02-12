@@ -10,7 +10,6 @@ Optimizations:
 """
 
 import concurrent.futures
-import re
 import sys
 from typing import Optional, List, Dict, Any, Tuple
 from langchain.tools import tool
@@ -43,18 +42,6 @@ def _get_data_scientist_agent():
     return _agent_pool["data_scientist"]
 
 
-def _get_source_formatter_agent():
-    """Get or create SourceFormatterAgent singleton."""
-    global _agent_pool
-    if "source_formatter" not in _agent_pool:
-        from app.agents.source_formatter_agent import SourceFormatterAgent
-
-        _agent_pool["source_formatter"] = SourceFormatterAgent(
-            model_name="gemini-3-flash-preview"
-        )
-    return _agent_pool["source_formatter"]
-
-
 def _get_validator_agent():
     """Get or create ValidatorAgent singleton."""
     global _agent_pool
@@ -63,12 +50,6 @@ def _get_validator_agent():
 
         _agent_pool["validator"] = ValidatorAgent(model_name="gemini-3-flash-preview")
     return _agent_pool["validator"]
-
-
-def reset_agent_pool():
-    """Reset the agent pool (useful for testing or reconfiguration)."""
-    global _agent_pool
-    _agent_pool = {}
 
 
 _accumulated_evidence: Dict[str, dict] = {}
@@ -373,73 +354,6 @@ def call_parallel_retrieval_and_analysis(
         combined_response["errors"] = errors
 
     return json.dumps(combined_response)
-
-
-@tool
-def call_source_formatter_agent(query: str, format_type: str = "citations") -> str:
-    """Call the Source Formatter Agent to format evidence and citations.
-
-    Use this tool when you need to:
-    - Format sources as citations
-    - Create footnotes for a response
-    - Build an evidence summary table
-    - Ensure proper source attribution
-
-    IMPORTANT: This tool automatically uses ALL accumulated evidence from previous
-    agent calls. You don't need to pass evidence manually.
-
-    Args:
-        query: The formatting request.
-        format_type: Type of formatting (citations, footnotes, inline, table).
-
-    Returns:
-        JSON string containing the formatted output.
-    """
-    from app.models import UniversalEvidenceObject
-    import json
-
-    _print_thinking(
-        "Source Formatter", f"Formatting evidence as {format_type}...", query
-    )
-
-    agent = _get_source_formatter_agent()  # Use agent pool
-
-    # Use accumulated evidence automatically
-    accumulated = get_evidence_pool()
-    evidence_list = []
-    if accumulated:
-        try:
-            evidence_list = [
-                UniversalEvidenceObject.model_validate(e) for e in accumulated
-            ]
-            print(f"   └─ Processing {len(evidence_list)} accumulated evidence items")
-            sys.stdout.flush()
-        except Exception as e:
-            print(f"   └─ Warning: Could not parse accumulated evidence: {e}")
-            sys.stdout.flush()
-
-    response: StandardAgentResponse = agent.invoke(
-        query=query,
-        evidence=evidence_list if evidence_list else None,
-        format_type=format_type,
-    )
-
-    _print_result(
-        "Source Formatter",
-        response.status.value,
-        response.confidence_score,
-        len(evidence_list),
-    )
-
-    return json.dumps(
-        {
-            "agent_id": response.agent_id.value,
-            "status": response.status.value,
-            "final_answer": response.final_answer,
-            "evidence_count": len(evidence_list),
-            "confidence_score": response.confidence_score,
-        }
-    )
 
 
 @tool

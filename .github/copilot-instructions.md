@@ -8,7 +8,6 @@ This project is a **Multi-Agent Fraud Detection System** built with Python, Lang
 - **Agents**:
   - `DataScientistAgent`: Analyzes structured data using SQL (DuckDB) and integrated Python code execution.
   - `RetrieverAgent`: Fetches documents and facts from knowledge bases.
-  - `SourceFormatterAgent`: Formats output with citations.
   - `ValidatorAgent`: Verifies answers and checks confidence.
 - **Data Flow**:
   - Agents exchange information using `UniversalEvidenceObject` (`app/models.py`).
