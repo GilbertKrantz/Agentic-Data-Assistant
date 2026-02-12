@@ -21,7 +21,6 @@ https://drive.google.com/drive/folders/112G5rutcskbKpWDTvBc8I9lWOvpwUoRE?usp=sha
 - **DataScientistAgent**: Analyzes structured fraud data using SQL queries and Python code execution
 - **RetrieverAgent**: Fetches relevant documents and facts from the knowledge base
 - **ValidatorAgent**: Verifies findings and assesses confidence levels
-- **SourceFormatterAgent**: Formats responses with proper citations and sources
 
 ## 🚀 Getting Started
 
@@ -86,8 +85,7 @@ Associate-AI-Engineer/
 │   │   ├── orchestrator/     # Central orchestrator agent
 │   │   ├── data_scientist_agent/  # SQL & analysis agent
 │   │   ├── retriever_agent/  # Document retrieval agent
-│   │   ├── validator_agent/  # Answer validation agent
-│   │   └── source_formatter_agent/ # Response formatting agent
+│   │   └── validator_agent/  # Answer validation agent
 │   ├── database/             # Data access layer
 │   │   ├── duckdb_utils.py   # DuckDB operations
 │   │   ├── chroma_utils.py   # ChromaDB operations
