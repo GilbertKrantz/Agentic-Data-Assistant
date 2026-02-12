@@ -54,9 +54,7 @@ class UniversalEvidenceObject(BaseModel):
 class AgentId(str, Enum):
     RETRIEVAL_AGENT = "retrieval_agent"
     DATASCIENCE_AGENT = "datascience_agent"
-    SOURCE_FORMATTER_AGENT = "source_formatter_agent"
     VALIDATOR_AGENT = "validator_agent"
-    INFO_CHECKER = "info_checker"
     ORCHESTRATOR = "orchestrator"
 
 

@@ -3,7 +3,6 @@ Orchestrator Agent - Main agent that coordinates all other agents.
 """
 
 import json
-import os
 import sys
 from typing import Any, Callable, Dict, List, Optional
 from langchain.agents import create_agent
@@ -29,7 +28,6 @@ from app.agents.orchestrator.tools import (
     call_retriever_agent,
     call_data_scientist_agent,
     call_parallel_retrieval_and_analysis,
-    call_source_formatter_agent,
     call_validator_agent,
     reset_evidence_pool,
     get_evidence_pool,
@@ -75,7 +73,6 @@ class OrchestratorSkillMiddleware(AgentMiddleware):
         call_retriever_agent,
         call_data_scientist_agent,
         call_parallel_retrieval_and_analysis,
-        # call_source_formatter_agent,
         call_validator_agent,
     ]
 
@@ -109,12 +106,6 @@ Use `call_data_scientist_agent` when you need to:
 - Run computations or ML models
 - Query SQL database directly (has direct SQL access)
 
-### Formatting Skill
-Use `call_source_formatter_agent` when you need to:
-- Format citations and references
-- Create structured evidence tables
-- Add footnotes to responses
-
 ### Validation Skill
 Use `call_validator_agent` when you need to:
 - Verify accuracy of responses
@@ -133,11 +124,6 @@ User asks a question → Call appropriate single agent → Return response
 1. Call Retriever to get data context
 2. Call Data Scientist with the context
 3. (Optional) Call Validator for important results
-
-### Report Generation
-1. Call Retriever or Data Scientist for content
-2. Call Source Formatter for citations
-3. Call Validator for final check
 """
         # Get current system message content as string
         if request.system_message is not None:
@@ -396,7 +382,6 @@ class OrchestratorAgent:
                     tool_descriptions = {
                         "call_retriever_agent": "Retrieval",
                         "call_data_scientist_agent": "Analysis",
-                        "call_source_formatter_agent": "Formatting",
                         "call_validator_agent": "Validation",
                     }
                     desc = tool_descriptions.get(tool_name, tool_name)

@@ -72,14 +72,7 @@ Time: 2 minutes total
 - Data-driven recommendations
 - When ONLY analysis is needed (Data Scientist has direct SQL!)
 
-### 3. Source Formatter Agent (`call_source_formatter_agent`)
-**Responsibility**: Format and cite evidence
-**Use for**:
-- Create proper citations for sources
-- Format evidence tables
-- Add footnotes/references
-
-### 4. Validator Agent (`call_validator_agent`)
+### 3. Validator Agent (`call_validator_agent`)
 **Responsibility**: Verify accuracy of answers
 **Use for**:
 - Fact-check statistical claims
@@ -146,7 +139,6 @@ ORCHESTRATOR_ROUTING_PROMPT = """
 2. **What's the primary need?**
    - Retrieve documents/facts → `call_retriever_agent()`
    - Analyze data/statistics → `call_data_scientist_agent()`
-   - Format citations → `call_source_formatter_agent()`
    - Verify accuracy → `call_validator_agent()`
 
 3. **Is this answer critical/numerical?**
